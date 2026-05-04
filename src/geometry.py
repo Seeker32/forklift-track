@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from math import hypot
 
 Point = tuple[float, float]
 
@@ -15,6 +16,49 @@ def point_side(point: Sequence[float], line_start: Sequence[float], line_end: Se
     ax, ay = _point(line_start)
     bx, by = _point(line_end)
     return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+
+
+def signed_distance_to_line(point: Sequence[float], line_start: Sequence[float], line_end: Sequence[float]) -> float:
+    """Return the signed perpendicular distance to a directed line."""
+    ax, ay = _point(line_start)
+    bx, by = _point(line_end)
+    length = hypot(bx - ax, by - ay)
+    if length == 0:
+        raise ValueError("Line start and end must be different points")
+    return point_side(point, line_start, line_end) / length
+
+
+def point_projection_ratio(point: Sequence[float], line_start: Sequence[float], line_end: Sequence[float]) -> float:
+    px, py = _point(point)
+    ax, ay = _point(line_start)
+    bx, by = _point(line_end)
+    dx = bx - ax
+    dy = by - ay
+    length_squared = dx * dx + dy * dy
+    if length_squared == 0:
+        raise ValueError("Line start and end must be different points")
+    return ((px - ax) * dx + (py - ay) * dy) / length_squared
+
+
+def point_in_line_zone(
+    point: Sequence[float],
+    line_start: Sequence[float],
+    line_end: Sequence[float],
+    line_width: float,
+) -> bool:
+    ratio = point_projection_ratio(point, line_start, line_end)
+    return 0 <= ratio <= 1 and abs(signed_distance_to_line(point, line_start, line_end)) <= line_width / 2.0
+
+
+def line_zone_side(
+    point: Sequence[float],
+    line_start: Sequence[float],
+    line_end: Sequence[float],
+    line_width: float,
+) -> int:
+    if point_in_line_zone(point, line_start, line_end, line_width):
+        return 0
+    return 1 if signed_distance_to_line(point, line_start, line_end) > 0 else -1
 
 
 def movement_vector(previous: Sequence[float], current: Sequence[float]) -> Point:

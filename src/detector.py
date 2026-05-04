@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 from typing import Any
+import warnings
 
 ModelLoader = Callable[[str], Any]
 
@@ -31,7 +33,8 @@ class ForkliftDetector:
                 raise
             if hasattr(self.model, "conf"):
                 self.model.conf = self.confidence
-            results = self.model(frame, size=640)
+            with self._suppress_legacy_yolov5_autocast_warning():
+                results = self.model(frame, size=640)
 
         if hasattr(results, "xyxy"):
             return self._detections_from_yolov5_results(results)
@@ -55,6 +58,17 @@ class ForkliftDetector:
                 )
 
         return detections
+
+    @staticmethod
+    @contextmanager
+    def _suppress_legacy_yolov5_autocast_warning() -> Iterator[None]:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"`torch\.cuda\.amp\.autocast\(args\.\.\.\)` is deprecated\.",
+                category=FutureWarning,
+            )
+            yield
 
     def _detections_from_yolov5_results(self, results: Any) -> list[dict[str, Any]]:
         detections: list[dict[str, Any]] = []

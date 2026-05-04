@@ -1,0 +1,8 @@
+cameras:
+  - camera_id: gate_01
+    source: videos/Videos_20260430185002.mp4
+    line:
+      start: [922, 440]
+      end: [1156, 469]
+    line_width: 80
+    in_direction: [-1, 0]

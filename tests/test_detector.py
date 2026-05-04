@@ -1,4 +1,5 @@
 import unittest
+import warnings
 
 from src.detector import ForkliftDetector
 
@@ -55,6 +56,16 @@ class FakeYolov5Model:
         return FakeYolov5Results()
 
 
+class WarningYolov5Model(FakeYolov5Model):
+    def __call__(self, frame, size):
+        warnings.warn(
+            "`torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return super().__call__(frame, size)
+
+
 class ForkliftDetectorTest(unittest.TestCase):
     def test_detect_loads_model_with_configured_path_and_returns_forklift_detections(self):
         loaded_paths = []
@@ -106,6 +117,37 @@ class ForkliftDetectorTest(unittest.TestCase):
             ],
         )
         self.assertEqual(detector.model.calls, [{"frame": "frame-1", "size": 640}])
+
+    def test_detect_suppresses_known_yolov5_autocast_future_warning(self):
+        detector = ForkliftDetector(
+            "models/best.pt",
+            confidence=0.4,
+            class_name="forklift_2",
+            model_loader=lambda path: WarningYolov5Model(),
+        )
+
+        with warnings.catch_warnings(record=True) as captured_warnings:
+            warnings.simplefilter("always")
+            detections = detector.detect(frame="frame-1")
+
+        self.assertEqual(
+            detections,
+            [
+                {
+                    "bbox": [10.0, 20.0, 30.0, 40.0],
+                    "score": 0.91,
+                    "class_name": "forklift_2",
+                }
+            ],
+        )
+        self.assertFalse(
+            [
+                warning
+                for warning in captured_warnings
+                if issubclass(warning.category, FutureWarning)
+                and "torch.cuda.amp.autocast(args...)" in str(warning.message)
+            ]
+        )
 
 
 if __name__ == "__main__":

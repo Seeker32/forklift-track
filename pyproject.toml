@@ -8,9 +8,17 @@ dependencies = [
     "dill>=0.4.1",
     "lap>=0.5.12",
     "numpy>=2.2.6",
+    "onnx>=1.21.0",
+    "onnxruntime==1.19.2",
     "opencv-python>=4.13.0.92",
     "pyyaml>=6.0.3",
+    "rfdetr>=1.5.2",
     "torch>=2.11.0",
     "ultralytics>=8.4.45",
     "yolov5>=7.0.14",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
 ]

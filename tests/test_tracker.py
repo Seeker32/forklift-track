@@ -33,6 +33,7 @@ class ByteTrackTrackerTest(unittest.TestCase):
                     "bbox": [10.0, 20.0, 30.0, 50.0],
                     "center": [20.0, 35.0],
                     "score": 0.86,
+                    "class_name": "forklift_with_load",
                 }
             ],
         )

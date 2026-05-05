@@ -10,6 +10,8 @@ class PipelineTest(unittest.TestCase):
     def test_run_processes_frames_and_collects_direction_events(self):
         config_path = self.write_config(
             """
+class_names:
+  - forklift_with_load
 cameras:
   - camera_id: gate_01
     source: fake-source
@@ -18,7 +20,6 @@ cameras:
       end: [10, 0]
     line_width: 4
     in_direction: [0, 1]
-    class_name: "forklift_with_load"
 """
         )
         captures = {"fake-source": FakeCapture(["frame-1", "frame-2", "frame-3"])}
@@ -40,6 +41,7 @@ cameras:
         self.assertEqual(events[0]["camera_id"], "gate_01")
         self.assertEqual(events[0]["track_id"], 5)
         self.assertEqual(events[0]["direction"], "in")
+        self.assertEqual(events[0]["class_name"], "forklift_with_load")
         self.assertTrue(captures["fake-source"].released)
 
     def test_run_raises_clear_error_when_video_source_cannot_open(self):
@@ -183,6 +185,8 @@ cameras:
     def test_run_debug_logs_frame_counts_track_zone_state_and_events(self):
         config_path = self.write_config(
             """
+class_names:
+  - forklift_with_load
 cameras:
   - camera_id: gate_01
     source: fake-source
@@ -191,7 +195,6 @@ cameras:
       end: [10, 0]
     line_width: 4
     in_direction: [0, 1]
-    class_name: "forklift_with_load"
 """
         )
         captures = {"fake-source": FakeCapture(["frame-1", "frame-2", "frame-3"])}
@@ -210,18 +213,20 @@ cameras:
         self.assertIn("[debug] camera=gate_01 frame=1 detections=1 tracks=1", debug_lines)
         self.assertIn(
             "[debug] camera=gate_01 frame=1 track_id=5 bbox=[4, -12, 6, -6] center=(5.0, -9.0) "
-            "bottom=(5.0, -6.0) crossed=False event=None",
+            "bottom=(5.0, -6.0) crossed=False class=forklift_with_load event=None",
             debug_lines,
         )
         self.assertIn(
             "[debug] camera=gate_01 frame=2 track_id=5 bbox=[4, -5, 6, 1] center=(5.0, -2.0) "
-            "bottom=(5.0, 1.0) crossed=True event=in",
+            "bottom=(5.0, 1.0) crossed=True class=forklift_with_load event=in",
             debug_lines,
         )
 
     def test_run_debug_video_writes_every_processed_frame_with_annotations(self):
         config_path = self.write_config(
             """
+class_names:
+  - forklift_with_load
 cameras:
   - camera_id: gate_01
     source: fake-source
@@ -230,7 +235,6 @@ cameras:
       end: [10, 0]
     line_width: 4
     in_direction: [0, 1]
-    class_name: "forklift_with_load"
 """
         )
         captures = {"fake-source": FakeCapture(["frame-1", "frame-2", "frame-3"])}
@@ -330,11 +334,13 @@ cameras:
             detector = _create_detector(
                 model_path="models/inference_model.onnx",
                 confidence=0.3,
-                class_name="forklift_2",
+                class_names=["forklift_empty"],
             )
 
         self.assertEqual(detector, onnx_detector.return_value)
-        onnx_detector.assert_called_once_with(onnx_path="models/inference_model.onnx", confidence=0.3)
+        onnx_detector.assert_called_once_with(
+            onnx_path="models/inference_model.onnx", confidence=0.3, allowed_class_names=["forklift_empty"],
+        )
         yolo_detector.assert_not_called()
 
     def test_create_detector_treats_onnx_suffix_case_insensitively(self):
@@ -342,25 +348,27 @@ cameras:
             detector = _create_detector(
                 model_path="models/INFERENCE_MODEL.ONNX",
                 confidence=0.3,
-                class_name="forklift_2",
+                class_names=["forklift_empty"],
             )
 
         self.assertEqual(detector, onnx_detector.return_value)
-        onnx_detector.assert_called_once_with(onnx_path="models/INFERENCE_MODEL.ONNX", confidence=0.3)
+        onnx_detector.assert_called_once_with(
+            onnx_path="models/INFERENCE_MODEL.ONNX", confidence=0.3, allowed_class_names=["forklift_empty"],
+        )
 
     def test_create_detector_uses_yolo_detector_for_non_onnx_model(self):
         with patch("src.pipeline.ForkliftDetector") as yolo_detector:
             detector = _create_detector(
                 model_path="models/best.pt",
                 confidence=0.4,
-                class_name="forklift_2",
+                class_names=["forklift_2"],
             )
 
         self.assertEqual(detector, yolo_detector.return_value)
         yolo_detector.assert_called_once_with(
             model_path="models/best.pt",
             confidence=0.4,
-            class_name="forklift_2",
+            class_names=["forklift_2"],
         )
 
     def write_config(self, content):
@@ -390,7 +398,7 @@ class FakeTracker:
         self.frame_count += 1
         bottom_y_by_frame = {1: -6, 2: 1, 3: 6}
         bottom_y = bottom_y_by_frame[self.frame_count]
-        return [{"track_id": 5, "center": [5, bottom_y - 3], "bbox": [4, bottom_y - 6, 6, bottom_y], "score": 0.9}]
+        return [{"track_id": 5, "center": [5, bottom_y - 3], "bbox": [4, bottom_y - 6, 6, bottom_y], "score": 0.9, "class_name": "forklift_with_load"}]
 
 
 class FakeCapture:

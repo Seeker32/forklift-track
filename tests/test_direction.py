@@ -35,7 +35,7 @@ class DirectionDetectorTest(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event["direction"], "out")
 
-    def test_direction_detector_does_not_emit_duplicate_event_for_same_track_direction(self):
+    def test_direction_detector_does_not_emit_duplicate_event_while_bbox_straddles_line(self):
         detector = DirectionDetector(
             camera_id="gate_01",
             line_start=(0.0, 0.0),
@@ -45,11 +45,11 @@ class DirectionDetectorTest(unittest.TestCase):
 
         detector.update({"track_id": 3, "center": (5.0, -5.0), "bbox": [3, -8, 7, -2]})
         first = detector.update({"track_id": 3, "center": (5.0, 0.0), "bbox": [3, -3, 7, 3]})
-        detector.update({"track_id": 3, "center": (5.0, -5.0), "bbox": [3, -8, 7, -2]})
-        duplicate = detector.update({"track_id": 3, "center": (5.0, 0.0), "bbox": [3, -3, 7, 3]})
+        # Bbox still straddles the line — same crossing, should NOT emit a duplicate
+        second = detector.update({"track_id": 3, "center": (5.0, 0.0), "bbox": [3, -3, 7, 3]})
 
         self.assertIsNotNone(first)
-        self.assertIsNone(duplicate)
+        self.assertIsNone(second)
 
     def test_direction_detector_allows_opposite_direction_once_for_same_track(self):
         detector = DirectionDetector(
@@ -104,9 +104,53 @@ class DirectionDetectorTest(unittest.TestCase):
                 "center": (5.0, -5.0),
                 "bottom": (5.0, -2.0),
                 "crossed": False,
+                "class_name": None,
                 "event": None,
             },
         )
+
+    def test_forklift_empty_crossing_does_not_emit_event(self):
+        detector = DirectionDetector(
+            camera_id="gate_01",
+            line_start=(0.0, 0.0),
+            line_end=(10.0, 0.0),
+            in_direction=(0.0, 1.0),
+        )
+
+        detector.update({"track_id": 1, "center": (5.0, -5.0), "bbox": [3, -8, 7, -2], "class_name": "forklift_empty"})
+        event = detector.update({"track_id": 1, "center": (5.0, 0.0), "bbox": [3, -3, 7, 3], "class_name": "forklift_empty"})
+
+        self.assertIsNone(event)
+
+    def test_forklift_with_load_crossing_emits_event(self):
+        detector = DirectionDetector(
+            camera_id="gate_01",
+            line_start=(0.0, 0.0),
+            line_end=(10.0, 0.0),
+            in_direction=(0.0, 1.0),
+        )
+
+        detector.update({"track_id": 2, "center": (5.0, -5.0), "bbox": [3, -8, 7, -2], "class_name": "forklift_with_load"})
+        event = detector.update({"track_id": 2, "center": (5.0, 0.0), "bbox": [3, -3, 7, 3], "class_name": "forklift_with_load"})
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event["direction"], "in")
+        self.assertEqual(event["class_name"], "forklift_with_load")
+
+    def test_missing_class_name_still_emits_event(self):
+        detector = DirectionDetector(
+            camera_id="gate_01",
+            line_start=(0.0, 0.0),
+            line_end=(10.0, 0.0),
+            in_direction=(0.0, 1.0),
+        )
+
+        detector.update({"track_id": 3, "center": (5.0, -5.0), "bbox": [3, -8, 7, -2]})
+        event = detector.update({"track_id": 3, "center": (5.0, 0.0), "bbox": [3, -3, 7, 3]})
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event["direction"], "in")
+        self.assertIsNone(event["class_name"])
 
 
 if __name__ == "__main__":

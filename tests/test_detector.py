@@ -77,7 +77,7 @@ class ForkliftDetectorTest(unittest.TestCase):
         detector = ForkliftDetector(
             "models/forklift.pt",
             confidence=0.4,
-            class_name="forklift",
+            class_names=["forklift"],
             model_loader=loader,
         )
 
@@ -100,7 +100,7 @@ class ForkliftDetectorTest(unittest.TestCase):
         detector = ForkliftDetector(
             "models/best.pt",
             confidence=0.4,
-            class_name="forklift_2",
+            class_names=["forklift_2"],
             model_loader=lambda path: FakeYolov5Model(),
         )
 
@@ -122,7 +122,7 @@ class ForkliftDetectorTest(unittest.TestCase):
         detector = ForkliftDetector(
             "models/best.pt",
             confidence=0.4,
-            class_name="forklift_2",
+            class_names=["forklift_2"],
             model_loader=lambda path: WarningYolov5Model(),
         )
 

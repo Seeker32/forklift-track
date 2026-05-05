@@ -33,8 +33,7 @@ track/
 
 ### 环境要求
 
-- Python >= 3.10
-- 依赖：ultralytics, yolov5, torch, opencv-python, numpy, pyyaml, onnxruntime, rfdetr
+Python >= 3.11
 
 ### 安装
 
@@ -83,7 +82,7 @@ cameras:
 | `[1, -1]` | 右上为 in ↗ |
 | `[-1, -1]` | 左上为 in ↖ |
 
-```
+
 
 **运行检测**
 

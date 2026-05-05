@@ -1,6 +1,12 @@
+class_names:
+  - forklift_empty
+  - forklift_with_load
+  - forklift_1
+  - forklift_2
+
 cameras:
   - camera_id: gate_01
-    source: videos/Videos_20260430185002.mp4
+    source: videos/42346d5303cc0df1099faa1821945c25.mp4
     line:
       start: [922, 440]
       end: [1156, 469]

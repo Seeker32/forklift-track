@@ -5,6 +5,9 @@ from typing import Any
 
 import numpy as np
 
+_CLASS_NAME_TO_ID: dict[str, int] = {"forklift_with_load": 0, "forklift_empty": 1}
+_CLASS_ID_TO_NAME: dict[int, str] = {0: "forklift_with_load", 1: "forklift_empty"}
+
 
 class ByteTrackTracker:
     """ByteTrack adapter with the project's stable tracking output format."""
@@ -57,11 +60,13 @@ class ByteTrackTracker:
     def _track_from_row(row: Any) -> dict[str, Any]:
         values = [float(value) for value in row]
         x1, y1, x2, y2 = values[:4]
+        class_id = int(values[6]) if len(values) > 6 else 0
         return {
             "track_id": int(values[4]),
             "bbox": [x1, y1, x2, y2],
             "center": [(x1 + x2) / 2, (y1 + y2) / 2],
             "score": float(values[5]),
+            "class_name": _CLASS_ID_TO_NAME.get(class_id, "forklift_with_load"),
         }
 
 
@@ -81,7 +86,7 @@ class _DetectionResults:
                 float(detection["bbox"][2]),
                 float(detection["bbox"][3]),
                 float(detection["score"]),
-                0.0,
+                float(_CLASS_NAME_TO_ID.get(detection.get("class_name", ""), 0)),
             ]
             for detection in detections
         ]

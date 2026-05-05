@@ -11,6 +11,7 @@ def create_event(
     direction: str,
     bbox: list[float] | tuple[float, ...],
     timestamp: datetime | None = None,
+    class_name: str | None = None,
 ) -> dict[str, Any]:
     event_time = timestamp or datetime.now(timezone.utc)
     return {
@@ -19,4 +20,5 @@ def create_event(
         "direction": direction,
         "timestamp": event_time.isoformat(),
         "bbox": list(bbox),
+        "class_name": class_name,
     }

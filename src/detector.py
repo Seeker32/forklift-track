@@ -17,12 +17,12 @@ class ForkliftDetector:
         self,
         model_path: str,
         confidence: float = 0.4,
-        class_name: str = "forklift_2",
+        class_names: list[str] | None = None,
         model_loader: ModelLoader | None = None,
     ) -> None:
         self.model_path = model_path
         self.confidence = confidence
-        self.class_name = class_name
+        self.class_names = class_names or ["forklift_2"]
         self.model = (model_loader or self._load_ultralytics_model)(model_path)
 
     def detect(self, frame: Any) -> list[dict[str, Any]]:
@@ -46,7 +46,7 @@ class ForkliftDetector:
             for box in getattr(result, "boxes", []):
                 class_id = int(self._scalar(box.cls))
                 detected_class = names[class_id] if isinstance(names, dict) else names[class_id]
-                if detected_class != self.class_name:
+                if detected_class not in self.class_names:
                     continue
 
                 detections.append(
@@ -81,7 +81,7 @@ class ForkliftDetector:
 
             class_id = int(values[5])
             detected_class = names[class_id] if isinstance(names, dict) else names[class_id]
-            if detected_class != self.class_name:
+            if detected_class not in self.class_names:
                 continue
 
             score = float(values[4])

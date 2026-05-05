@@ -53,6 +53,7 @@ def run(
             camera_config = {**camera_config, "model_path": model_path}
         _run_camera(
             camera_config,
+            class_names=config["class_names"],
             detector_factory=detector_factory,
             tracker_factory=tracker_factory,
             capture_factory=capture_factory,
@@ -74,7 +75,14 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
     if not isinstance(cameras, list) or not cameras:
         raise ValueError("Config must define a non-empty cameras list")
 
-    return {"cameras": [_normalize_camera_config(camera) for camera in cameras]}
+    class_names = data.get("class_names", ["forklift_2"])
+    if isinstance(class_names, str):
+        class_names = [class_names]
+
+    return {
+        "class_names": list(class_names),
+        "cameras": [_normalize_camera_config(camera) for camera in cameras],
+    }
 
 
 def _normalize_camera_config(camera: Any) -> dict[str, Any]:
@@ -96,7 +104,6 @@ def _normalize_camera_config(camera: Any) -> dict[str, Any]:
         "in_direction": _point(_required(camera, "in_direction"), f"Camera {camera_id} in_direction"),
         "model_path": str(camera.get("model_path", "models/best.pt")),
         "confidence": float(camera.get("confidence", 0.4)),
-        "class_name": str(camera.get("class_name", "forklift_2")),
         "max_missing_frames": int(camera.get("max_missing_frames", 30)),
     }
 
@@ -104,6 +111,7 @@ def _normalize_camera_config(camera: Any) -> dict[str, Any]:
 def _run_camera(
     camera_config: dict[str, Any],
     *,
+    class_names: list[str],
     detector_factory: DetectorFactory,
     tracker_factory: TrackerFactory,
     capture_factory: CaptureFactory,
@@ -117,7 +125,7 @@ def _run_camera(
     detector = detector_factory(
         model_path=camera_config["model_path"],
         confidence=camera_config["confidence"],
-        class_name=camera_config["class_name"],
+        class_names=class_names,
     )
     tracker = tracker_factory()
     direction_detector = DirectionDetector(
@@ -152,7 +160,6 @@ def _run_camera(
                 )
 
             detections = detector.detect(frame)
-            detections = [d for d in detections if d.get("class_name") == camera_config["class_name"]]
             tracks = tracker.update(detections)
             should_debug_frame = debug and _should_debug_frame(frame_index, debug_every, detections, tracks)
             if should_debug_frame and debug_sink is not None:
@@ -183,10 +190,10 @@ def _run_camera(
         capture.release()
 
 
-def _create_detector(*, model_path: str, confidence: float, class_name: str) -> Any:
+def _create_detector(*, model_path: str, confidence: float, class_names: list[str]) -> Any:
     if Path(model_path).suffix.lower() == ".onnx":
-        return ONNXForkliftDetector(onnx_path=model_path, confidence=confidence)
-    return ForkliftDetector(model_path=model_path, confidence=confidence, class_name=class_name)
+        return ONNXForkliftDetector(onnx_path=model_path, confidence=confidence, allowed_class_names=class_names)
+    return ForkliftDetector(model_path=model_path, confidence=confidence, class_names=class_names)
 
 
 def _create_capture(source: str) -> Any:
@@ -205,7 +212,7 @@ def _format_track_debug(camera_id: str, snapshot: dict[str, Any] | None) -> str:
     return (
         f"[debug] camera={camera_id} frame={snapshot['frame']} track_id={snapshot['track_id']} "
         f"bbox={snapshot['bbox']} center={snapshot['center']} bottom={snapshot['bottom']} "
-        f"crossed={snapshot['crossed']} event={snapshot['event']}"
+        f"crossed={snapshot['crossed']} class={snapshot.get('class_name')} event={snapshot['event']}"
     )
 
 

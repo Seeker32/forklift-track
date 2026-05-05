@@ -23,10 +23,12 @@ class ONNXForkliftDetector:
         onnx_path: str,
         confidence: float = 0.4,
         class_names: list[str] | None = None,
+        allowed_class_names: list[str] | None = None,
         num_select: int = 300,
     ) -> None:
         self.confidence = confidence
         self.class_names = class_names or ["forklift_with_load", "forklift_empty"]
+        self.allowed_class_names = allowed_class_names
         self.num_select = num_select
         self._session = ort.InferenceSession(
             onnx_path,
@@ -47,10 +49,14 @@ class ONNXForkliftDetector:
                     "target_sizes": np.array([[h, w]], dtype=np.int64),
                 },
             )
-            return self._postprocess_deploy(scores, labels, boxes, h, w)
+            detections = self._postprocess_deploy(scores, labels, boxes, h, w)
+        else:
+            dets, labels = self._session.run(None, {"input": input_tensor})
+            detections = self._postprocess(dets, labels, h, w)
 
-        dets, labels = self._session.run(None, {"input": input_tensor})
-        return self._postprocess(dets, labels, h, w)
+        if self.allowed_class_names is not None:
+            detections = [d for d in detections if d.get("class_name") in self.allowed_class_names]
+        return detections
 
     def _preprocess(self, frame: np.ndarray) -> np.ndarray:
         import cv2

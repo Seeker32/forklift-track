@@ -3,14 +3,18 @@ from __future__ import annotations
 import argparse
 import sys
 
+import onnxruntime as ort
+
 from src.line_tool import select_line_from_source
 from src.pipeline import load_config, run
 
 
 def main(argv: list[str] | None = None) -> None:
+    ort.preload_dlls()
+
     parser = argparse.ArgumentParser(description="Forklift entry/exit direction tracking")
     parser.add_argument("--config", default="config/cameras.yaml", help="Path to camera configuration file")
-    parser.add_argument("--model-path", help="Override detector model path for all configured cameras")
+    parser.add_argument("--model-path", default="models/model.onnx", help="Override detector model path for all configured cameras")
     parser.add_argument("--select-line", help="Open a video source and click two points to print line config")
     parser.add_argument("--debug", action="store_true", help="Print frame, track, and crossing-zone diagnostics")
     parser.add_argument("--debug-every", type=int, default=1, help="Print debug summaries every N frames")

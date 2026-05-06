@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
-import onnxruntime as ort
 
 
 class ONNXForkliftDetector:
@@ -17,6 +17,7 @@ class ONNXForkliftDetector:
 
     MEANS = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     STDS = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    DEFAULT_TRT_ENGINE_CACHE_PATH = str(Path(__file__).resolve().parents[1] / "models" / "trt_engine_cache")
 
     def __init__(
         self,
@@ -25,17 +26,51 @@ class ONNXForkliftDetector:
         class_names: list[str] | None = None,
         allowed_class_names: list[str] | None = None,
         num_select: int = 300,
+        providers: list[str | tuple[str, dict[str, str]]] | None = None,
+        trt_engine_cache_path: str | None = None,
+        trt_fp16: bool = False,
+        runtime_module: Any | None = None,
+        runtime_loader: Any | None = None,
     ) -> None:
         self.confidence = confidence
         self.class_names = class_names or ["forklift_with_load", "forklift_empty"]
         self.allowed_class_names = allowed_class_names
         self.num_select = num_select
+        ort = runtime_module
+        if ort is None:
+            try:
+                ort = (runtime_loader or _load_onnxruntime)()
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    "ONNX Runtime is unavailable. Install onnxruntime or onnxruntime-gpu to load .onnx models."
+                ) from exc
         self._session = ort.InferenceSession(
             onnx_path,
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            providers=providers or self._default_providers(
+                trt_engine_cache_path=trt_engine_cache_path,
+                trt_fp16=trt_fp16,
+            ),
         )
         output_names = {o.name for o in self._session.get_outputs()}
         self._is_deploy_format = {"scores", "labels", "boxes"}.issubset(output_names)
+
+    @staticmethod
+    def _default_providers(
+        *,
+        trt_engine_cache_path: str | None,
+        trt_fp16: bool,
+    ) -> list[str | tuple[str, dict[str, str]]]:
+        tensorrt_options = {
+            "trt_engine_cache_enable": "1",
+            "trt_engine_cache_path": trt_engine_cache_path or ONNXForkliftDetector.DEFAULT_TRT_ENGINE_CACHE_PATH,
+        }
+        if trt_fp16:
+            tensorrt_options["trt_fp16_enable"] = "1"
+        return [
+            ("TensorrtExecutionProvider", tensorrt_options),
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
 
     def detect(self, frame: np.ndarray) -> list[dict[str, Any]]:
         h, w = frame.shape[:2]
@@ -148,3 +183,9 @@ class ONNXForkliftDetector:
             )
 
         return detections
+
+
+def _load_onnxruntime() -> Any:
+    import onnxruntime as ort
+
+    return ort

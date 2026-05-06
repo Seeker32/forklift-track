@@ -9,6 +9,7 @@ import yaml
 from src.debug_video import DebugVideoWriter
 from src.detector import ForkliftDetector
 from src.detector_onnx import ONNXForkliftDetector
+from src.detector_tensorrt import TensorRTForkliftDetector
 from src.direction import DirectionDetector
 from src.tracker import ByteTrackTracker
 
@@ -191,8 +192,15 @@ def _run_camera(
 
 
 def _create_detector(*, model_path: str, confidence: float, class_names: list[str]) -> Any:
-    if Path(model_path).suffix.lower() == ".onnx":
+    suffix = Path(model_path).suffix.lower()
+    if suffix == ".onnx":
         return ONNXForkliftDetector(onnx_path=model_path, confidence=confidence, allowed_class_names=class_names)
+    if suffix == ".engine":
+        return TensorRTForkliftDetector(
+            engine_path=model_path,
+            confidence=confidence,
+            allowed_class_names=class_names,
+        )
     return ForkliftDetector(model_path=model_path, confidence=confidence, class_names=class_names)
 
 

@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import onnxruntime as ort
+ort.preload_dlls()
 
 from src.pipeline import _create_capture, _create_detector, _run_camera, load_config
 from src.tracker import ByteTrackTracker
@@ -27,11 +29,17 @@ def run_detector_benchmark(
     class_names: list[str],
     frames: int,
     warmup: int,
+    provider_mode: str = "auto",
     detector_factory: Any = _create_detector,
     capture_factory: Any = _create_capture,
     clock: Any = time.perf_counter,
 ) -> dict[str, Any]:
-    detector = detector_factory(model_path=model_path, confidence=confidence, class_names=class_names)
+    detector = detector_factory(
+        model_path=model_path,
+        confidence=confidence,
+        class_names=class_names,
+        providers=_provider_mode_providers(provider_mode),
+    )
     capture = capture_factory(source)
     if not capture.isOpened():
         raise RuntimeError(f"Failed to open video source: {source}")
@@ -91,6 +99,7 @@ def run_pipeline_benchmark(
     class_names: list[str],
     frames: int,
     warmup: int,
+    provider_mode: str = "auto",
     detector_factory: Any = _create_detector,
     tracker_factory: Any = ByteTrackTracker,
     capture_factory: Any = _create_capture,
@@ -101,7 +110,12 @@ def run_pipeline_benchmark(
     max_frames = _max_frames(frames=frames, warmup=warmup)
 
     def wrapped_detector_factory(*, model_path: str, confidence: float, class_names: list[str]) -> Any:
-        detector = detector_factory(model_path=model_path, confidence=confidence, class_names=class_names)
+        detector = detector_factory(
+            model_path=model_path,
+            confidence=confidence,
+            class_names=class_names,
+            providers=_provider_mode_providers(provider_mode),
+        )
         metrics.providers = _detector_providers(detector)
         return _TimedDetector(detector=detector, metrics=metrics)
 
@@ -228,6 +242,18 @@ def _detector_providers(detector: Any) -> list[str]:
     return []
 
 
+def _provider_mode_providers(provider_mode: str) -> list[str | tuple[str, dict[str, str]]] | None:
+    if provider_mode == "auto":
+        return None
+    if provider_mode == "trt":
+        return ["TensorrtExecutionProvider"]
+    if provider_mode == "cuda":
+        return ["CUDAExecutionProvider"]
+    if provider_mode == "cpu":
+        return ["CPUExecutionProvider"]
+    raise ValueError(f"Unsupported provider mode: {provider_mode}")
+
+
 def _latency_summary(latencies_ms: list[float]) -> dict[str, float]:
     if not latencies_ms:
         return {"mean": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0}
@@ -296,7 +322,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", default=str(project_root / "config" / "cameras.yaml"))
     parser.add_argument("--camera-id", help="Benchmark one configured camera by camera_id")
     parser.add_argument("--source", help="Override video source for the selected camera")
-    parser.add_argument("--model-path", help="Override model path for the selected camera")
+    parser.add_argument("--model-path", default="models/model.onnx", help="Override model path for the selected camera")
+    parser.add_argument(
+        "--provider-mode",
+        choices=["auto", "trt", "cuda", "cpu"],
+        default="auto",
+        help="Force a single ONNX Runtime provider for benchmarking",
+    )
     parser.add_argument("--frames", type=int, default=300, help="Measured frames after warmup (0=all)")
     parser.add_argument("--warmup", type=int, default=30, help="Warmup frames to exclude from latency stats")
     parser.add_argument("--confidence", type=float, help="Override detector confidence")
@@ -318,6 +350,7 @@ def main(argv: list[str] | None = None) -> None:
             class_names=config["class_names"],
             frames=args.frames,
             warmup=args.warmup,
+            provider_mode=args.provider_mode,
         )
     else:
         result = run_pipeline_benchmark(
@@ -325,6 +358,7 @@ def main(argv: list[str] | None = None) -> None:
             class_names=config["class_names"],
             frames=args.frames,
             warmup=args.warmup,
+            provider_mode=args.provider_mode,
         )
 
     if args.json:

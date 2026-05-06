@@ -190,10 +190,23 @@ def _run_camera(
         capture.release()
 
 
-def _create_detector(*, model_path: str, confidence: float, class_names: list[str]) -> Any:
+def _create_detector(
+    *,
+    model_path: str,
+    confidence: float,
+    class_names: list[str],
+    providers: list[str | tuple[str, dict[str, str]]] | None = None,
+) -> Any:
     suffix = Path(model_path).suffix.lower()
     if suffix == ".onnx":
-        return ONNXForkliftDetector(onnx_path=model_path, confidence=confidence, allowed_class_names=class_names)
+        kwargs = {
+            "onnx_path": model_path,
+            "confidence": confidence,
+            "allowed_class_names": class_names,
+        }
+        if providers is not None:
+            kwargs["providers"] = providers
+        return ONNXForkliftDetector(**kwargs)
     if suffix == ".engine":
         raise ValueError(
             "TensorRT .engine models are no longer supported; export or deploy an equivalent .onnx model instead."

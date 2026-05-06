@@ -51,8 +51,10 @@ class ONNXForkliftDetector:
                 trt_fp16=trt_fp16,
             ),
         )
-        output_names = {o.name for o in self._session.get_outputs()}
-        self._is_deploy_format = {"scores", "labels", "boxes"}.issubset(output_names)
+        self._output_names = tuple(output.name for output in self._session.get_outputs())
+        output_name_set = set(self._output_names)
+        self._is_raw_output_format = {"pred_boxes", "pred_logits"}.issubset(output_name_set)
+        self._is_deploy_format = {"scores", "labels", "boxes"}.issubset(output_name_set)
 
     @staticmethod
     def _default_providers(
@@ -61,11 +63,11 @@ class ONNXForkliftDetector:
         trt_fp16: bool,
     ) -> list[str | tuple[str, dict[str, str]]]:
         tensorrt_options = {
-            "trt_engine_cache_enable": "1",
+            "trt_engine_cache_enable": "True",
             "trt_engine_cache_path": trt_engine_cache_path or ONNXForkliftDetector.DEFAULT_TRT_ENGINE_CACHE_PATH,
         }
         if trt_fp16:
-            tensorrt_options["trt_fp16_enable"] = "1"
+            tensorrt_options["trt_fp16_enable"] = "True"
         return [
             ("TensorrtExecutionProvider", tensorrt_options),
             "CUDAExecutionProvider",
@@ -76,22 +78,37 @@ class ONNXForkliftDetector:
         h, w = frame.shape[:2]
         input_tensor = self._preprocess(frame)
 
-        if self._is_deploy_format:
-            scores, labels, boxes = self._session.run(
-                ["scores", "labels", "boxes"],
-                {
-                    "input": input_tensor,
-                    "target_sizes": np.array([[h, w]], dtype=np.int64),
-                },
+        outputs = self._session.run(None, {"input": input_tensor})
+        output_map = {name: value for name, value in zip(self._output_names, outputs)}
+
+        if self._is_raw_output_format:
+            detections = self._postprocess(
+                dets=np.asarray(self._require_output(output_map, "pred_boxes")),
+                labels=np.asarray(self._require_output(output_map, "pred_logits")),
+                orig_h=h,
+                orig_w=w,
             )
-            detections = self._postprocess_deploy(scores, labels, boxes, h, w)
+        elif self._is_deploy_format:
+            detections = self._postprocess_deploy(
+                scores=np.asarray(self._require_output(output_map, "scores")),
+                labels=np.asarray(self._require_output(output_map, "labels")),
+                boxes=np.asarray(self._require_output(output_map, "boxes")),
+                orig_h=h,
+                orig_w=w,
+            )
         else:
-            dets, labels = self._session.run(None, {"input": input_tensor})
-            detections = self._postprocess(dets, labels, h, w)
+            detections = self._postprocess(np.asarray(outputs[0]), np.asarray(outputs[1]), h, w)
 
         if self.allowed_class_names is not None:
             detections = [d for d in detections if d.get("class_name") in self.allowed_class_names]
         return detections
+
+    @staticmethod
+    def _require_output(output_map: dict[str, Any], name: str) -> Any:
+        value = output_map.get(name)
+        if value is None:
+            raise RuntimeError(f"ONNX Runtime returned no data for required output: {name}")
+        return value
 
     def _preprocess(self, frame: np.ndarray) -> np.ndarray:
         import cv2

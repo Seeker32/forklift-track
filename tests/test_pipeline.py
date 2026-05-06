@@ -356,6 +356,38 @@ cameras:
             onnx_path="models/INFERENCE_MODEL.ONNX", confidence=0.3, allowed_class_names=["forklift_empty"],
         )
 
+    def test_create_detector_uses_tensorrt_detector_for_engine_model(self):
+        with patch("src.pipeline.TensorRTForkliftDetector", create=True) as tensorrt_detector, patch(
+            "src.pipeline.ONNXForkliftDetector"
+        ) as onnx_detector, patch("src.pipeline.ForkliftDetector") as yolo_detector:
+            detector = _create_detector(
+                model_path="models/inference_model.engine",
+                confidence=0.3,
+                class_names=["forklift_empty"],
+            )
+
+        self.assertEqual(detector, tensorrt_detector.return_value)
+        tensorrt_detector.assert_called_once_with(
+            engine_path="models/inference_model.engine",
+            confidence=0.3,
+            allowed_class_names=["forklift_empty"],
+        )
+        onnx_detector.assert_not_called()
+        yolo_detector.assert_not_called()
+
+    def test_create_detector_treats_engine_suffix_case_insensitively(self):
+        with patch("src.pipeline.TensorRTForkliftDetector", create=True) as tensorrt_detector:
+            detector = _create_detector(
+                model_path="models/INFERENCE_MODEL.ENGINE",
+                confidence=0.3,
+                class_names=["forklift_empty"],
+            )
+
+        self.assertEqual(detector, tensorrt_detector.return_value)
+        tensorrt_detector.assert_called_once_with(
+            engine_path="models/INFERENCE_MODEL.ENGINE", confidence=0.3, allowed_class_names=["forklift_empty"],
+        )
+
     def test_create_detector_uses_yolo_detector_for_non_onnx_model(self):
         with patch("src.pipeline.ForkliftDetector") as yolo_detector:
             detector = _create_detector(

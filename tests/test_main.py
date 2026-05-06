@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import main
@@ -70,6 +71,31 @@ class MainTest(unittest.TestCase):
         load_config.assert_called_once_with("config/cameras.yaml")
         select_line.assert_called_once_with("videos/gate_01.mp4", line_width=60.0)
         run.assert_not_called()
+
+    def test_preload_onnxruntime_dlls_ignores_missing_runtime(self):
+        with patch("builtins.__import__", side_effect=import_side_effect("onnxruntime")):
+            main._preload_onnxruntime_dlls()
+
+    def test_preload_onnxruntime_dlls_calls_preload_when_runtime_exists(self):
+        fake_runtime = MagicMock()
+
+        with patch("builtins.__import__", side_effect=import_side_effect("onnxruntime", fake_runtime)):
+            main._preload_onnxruntime_dlls()
+
+        fake_runtime.preload_dlls.assert_called_once_with()
+
+
+def import_side_effect(target_name, module=None):
+    original_import = __import__
+
+    def _import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == target_name:
+            if module is None:
+                raise ModuleNotFoundError(f"No module named '{target_name}'")
+            return module
+        return original_import(name, globals, locals, fromlist, level)
+
+    return _import
 
 
 if __name__ == "__main__":

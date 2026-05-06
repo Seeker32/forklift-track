@@ -73,10 +73,16 @@ class ONNXForkliftDetector:
         # dets: [1, num_queries, 4] — cxcywh normalized to [0,1]
         # labels: [1, num_queries, num_classes] — raw logits
         boxes = dets[0]
-        logits = labels[0]
+        class_logits = labels[0]
+        num_classes = len(self.class_names)
 
-        probs = 1.0 / (1.0 + np.exp(-logits))
-        num_classes = probs.shape[1]
+        if class_logits.shape[1] < num_classes:
+            raise RuntimeError(
+                f"Model returned {class_logits.shape[1]} class logits, expected at least {num_classes}."
+            )
+
+        # RF-DETR library export returns raw logits; keep only the application classes.
+        probs = 1.0 / (1.0 + np.exp(-class_logits[:, :num_classes]))
 
         flat_probs = probs.reshape(-1)
         num_select = min(self.num_select, flat_probs.shape[0])
@@ -91,10 +97,10 @@ class ONNXForkliftDetector:
 
         selected_boxes = boxes[box_indices]
         cx, cy, bw, bh = selected_boxes[:, 0], selected_boxes[:, 1], selected_boxes[:, 2], selected_boxes[:, 3]
-        x1 = (cx - bw / 2.0) * orig_w
-        y1 = (cy - bh / 2.0) * orig_h
-        x2 = (cx + bw / 2.0) * orig_w
-        y2 = (cy + bh / 2.0) * orig_h
+        x1 = np.clip((cx - bw / 2.0) * orig_w, 0, orig_w - 1)
+        y1 = np.clip((cy - bh / 2.0) * orig_h, 0, orig_h - 1)
+        x2 = np.clip((cx + bw / 2.0) * orig_w, 0, orig_w - 1)
+        y2 = np.clip((cy + bh / 2.0) * orig_h, 0, orig_h - 1)
 
         detections: list[dict[str, Any]] = []
         for i in range(len(topk_scores)):
@@ -102,16 +108,11 @@ class ONNXForkliftDetector:
             if score < self.confidence:
                 continue
             cls_id = int(class_ids[i])
-            if cls_id == 0:  # background
-                continue
-            cls_idx = cls_id - 1
-            if cls_idx >= len(self.class_names):
-                continue
             detections.append(
                 {
                     "bbox": [float(x1[i]), float(y1[i]), float(x2[i]), float(y2[i])],
                     "score": float(score),
-                    "class_name": self.class_names[cls_idx],
+                    "class_name": self.class_names[cls_id],
                 }
             )
 

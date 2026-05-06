@@ -41,6 +41,54 @@ Python >= 3.11
 uv sync
 ```
 
+### Jetson Orin NX Super 安装
+
+Jetson 建议使用 `uv` 管理项目虚拟环境和 Python 依赖，不要直接安装到系统 Python。
+
+1. 先安装 JetPack 提供的系统依赖：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-venv python3-pip libopenblas-dev libopencv-python
+```
+
+2. 安装 `uv`：
+
+```bash
+python3 -m pip install --upgrade uv
+```
+
+3. 创建并激活由 `uv` 管理的虚拟环境：
+
+```bash
+uv venv
+source .venv/bin/activate
+```
+
+4. 安装与当前 JetPack / CUDA 版本匹配的 NVIDIA PyTorch wheel 和 `onnxruntime-gpu`：
+
+```bash
+# 按实际 JetPack 版本替换下面两个 URL
+export TORCH_INSTALL="https://developer.download.nvidia.com/compute/redist/jp/v<JP_VERSION>/pytorch/<TORCH_WHEEL>.whl"
+export ORT_INSTALL="https://developer.download.nvidia.com/compute/redist/jp/v<JP_VERSION>/onnxruntime_gpu/<ONNXRUNTIME_WHEEL>.whl"
+
+uv pip install --no-cache "$TORCH_INSTALL"
+uv pip install --no-cache "$ORT_INSTALL"
+```
+
+`torch` 不要直接使用 PyPI 通用包，必须安装 NVIDIA 提供的 Jetson 专用 wheel。`onnxruntime-gpu` 也应安装与当前 JetPack 匹配的版本。如果当前 JetPack 没有可用的 `onnxruntime-gpu` wheel，需要改用 NVIDIA 提供的其他安装方式或自行构建。
+
+5. 安装项目剩余依赖：
+
+```bash
+uv sync --group jetson
+```
+
+说明：
+- `jetson` 依赖组只包含适合直接安装的那部分 Python 包。
+- `opencv-python` 在 Jetson 上更适合通过 JetPack / `apt` 安装。
+- 如果需要 CUDA 版 OpenCV，通常需要自行编译，而不是依赖 PyPI。
+
 ### 使用
 
 **配置摄像头**

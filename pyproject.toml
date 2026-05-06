@@ -22,3 +22,17 @@ dependencies = [
 dev = [
     "pytest>=9.0.3",
 ]
+# Jetson Orin NX Super:
+# - Prefer installing into a project virtualenv instead of the system Python.
+# - Install NVIDIA-provided PyTorch wheel that matches the target JetPack/CUDA version.
+# - Install the matching ONNX Runtime GPU wheel or package source for that JetPack release.
+# - OpenCV is usually better installed from JetPack/apt packages on Jetson, not from PyPI.
+# - Then install this group for the remaining Python packages.
+jetson = [
+    "dill>=0.4.1",
+    "lap>=0.5.12",
+    "numpy>=2.2.6",
+    "onnx>=1.21.0",
+    "pyyaml>=6.0.3",
+    "ultralytics>=8.4.45",
+]

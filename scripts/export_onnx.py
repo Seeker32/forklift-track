@@ -1,116 +1,104 @@
-"""Convert RF-DETR Small fine-tuned checkpoint to ONNX.
-
-Usage: uv run python scripts/export_onnx.py
-Output: models/inference_model.onnx
-"""
-
-import argparse
-from pathlib import Path
+import os
 
 import torch
+import torch.nn.functional as F
+from rfdetr import RFDETRSmall
+from rfdetr.utilities import box_ops
 
-from rfdetr.config import RFDETRSmallConfig
-from rfdetr.main import populate_args
+# Monkey-patch: ONNX doesn't support _upsample_bicubic2d_aa (antialias=True).
+# RFDETR uses this only for positional embedding interpolation, where
+# anti-aliasing is irrelevant — safe to disable.
+_orig_interpolate = F.interpolate
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-
-def build_args(checkpoint: dict) -> argparse.Namespace:
-    """Build model args from checkpoint metadata and RFDETRSmallConfig defaults."""
-    ckpt_args = checkpoint["args"]
-    config = RFDETRSmallConfig()
-
-    return populate_args(
-        num_classes=2,
-        resolution=512,
-        pretrain_weights=None,
-        encoder=config.encoder,
-        hidden_dim=config.hidden_dim,
-        patch_size=config.patch_size,
-        num_windows=config.num_windows,
-        dec_layers=config.dec_layers,
-        sa_nheads=config.sa_nheads,
-        ca_nheads=config.ca_nheads,
-        dec_n_points=config.dec_n_points,
-        num_queries=config.num_queries,
-        num_select=config.num_select,
-        projector_scale=config.projector_scale,
-        out_feature_indexes=config.out_feature_indexes,
-        bbox_reparam=config.bbox_reparam,
-        lite_refpoint_refine=config.lite_refpoint_refine,
-        two_stage=config.two_stage,
-        group_detr=ckpt_args.get("group_detr", 13),
-        position_embedding="sine",
-        use_cls_token=False,
-        layer_norm=config.layer_norm,
-        positional_encoding_size=config.positional_encoding_size,
-        device="cpu",
-        aux_loss=False,
-        segmentation_head=False,
+def _interpolate_no_aa(
+    input,
+    size=None,
+    scale_factor=None,
+    mode="nearest",
+    align_corners=None,
+    recompute_scale_factor=None,
+    antialias=False,
+):
+    return _orig_interpolate(
+        input,
+        size=size,
+        scale_factor=scale_factor,
+        mode=mode,
+        align_corners=align_corners,
+        recompute_scale_factor=recompute_scale_factor,
+        antialias=False,
     )
 
 
-def main() -> None:
-    checkpoint_path = PROJECT_ROOT / "models" / "checkpoint_best_regular.pth"
-    output_dir = PROJECT_ROOT / "models"
-    output_dir.mkdir(parents=True, exist_ok=True)
+F.interpolate = _interpolate_no_aa
 
-    print(f"Loading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(
-        str(checkpoint_path), map_location="cpu", weights_only=False
-    )
-
-    class_names = checkpoint["args"].get(
-        "class_names", ["forklift_with_load", "forklift_empty"]
-    )
-    print(f"Classes: {class_names}")
-
-    # Build model
-    print("Building model...")
-    from rfdetr.models.lwdetr import build_model
-
-    args = build_args(checkpoint)
-    model = build_model(args)
-
-    # Load fine-tuned weights
-    print("Loading fine-tuned weights...")
-    state_dict = checkpoint["model"]
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    if missing:
-        print(f"  Missing keys: {len(missing)}")
-        for k in missing[:5]:
-            print(f"    {k}")
-    if unexpected:
-        print(f"  Unexpected keys: {len(unexpected)}")
-
-    # Switch to export-compatible forward pass
-    model.export()
-    model.eval()
-
-    # Prepare dummy input
-    print("Exporting to ONNX...")
-    dummy = torch.randn(1, 3, 512, 512)
-
-    output_path = output_dir / "inference_model.onnx"
-    torch.onnx.export(
-        model,
-        dummy,
-        str(output_path),
-        input_names=["input"],
-        output_names=["dets", "labels"],
-        export_params=True,
-        keep_initializers_as_inputs=False,
-        do_constant_folding=True,
-        opset_version=17,
-        dynamo=False,
-    )
-
-    import onnx
-
-    onnx_model = onnx.load(str(output_path))
-    onnx.checker.check_model(onnx_model)
-    print(f"ONNX model saved: {output_path}")
+CHECKPOINT_PATH = "../models/checkpoint_best_total.pth"
+OUTPUT_PATH = "../models/model.onnx"
+RESOLUTION = 512
+NUM_CLASSES = 2
+NUM_SELECT = 300
 
 
-if __name__ == "__main__":
-    main()
+class DeployExportWrapper(torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, num_classes: int, num_select: int):
+        super().__init__()
+        self.model = model
+        self.num_classes = num_classes
+        self.num_select = num_select
+
+    def forward(self, x: torch.Tensor, target_sizes: torch.Tensor):
+        outputs = self.model(x)
+        pred_logits = outputs["pred_logits"][..., : self.num_classes]
+        pred_boxes = outputs["pred_boxes"]
+
+        probs = pred_logits.sigmoid()
+        batch_size, num_queries, num_classes = probs.shape
+
+        topk_values, topk_indexes = torch.topk(
+            probs.reshape(batch_size, num_queries * num_classes),
+            k=min(self.num_select, num_queries * num_classes),
+            dim=1,
+        )
+        topk_boxes = torch.div(topk_indexes, num_classes, rounding_mode="floor")
+        labels = topk_indexes % num_classes
+
+        boxes = box_ops.box_cxcywh_to_xyxy(pred_boxes)
+        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, 4))
+
+        img_h, img_w = target_sizes.unbind(1)
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1).to(boxes.dtype)
+        boxes = boxes * scale_fct[:, None, :]
+
+        return topk_values, labels.to(torch.int64), boxes
+
+
+print(f"Loading checkpoint: {CHECKPOINT_PATH}")
+model = RFDETRSmall(pretrain_weights=CHECKPOINT_PATH, num_classes=NUM_CLASSES, device="cuda:0")
+raw_model = model.model.model
+raw_model.eval()
+
+wrapper = DeployExportWrapper(raw_model, num_classes=NUM_CLASSES, num_select=NUM_SELECT)
+dummy_input = torch.randn(1, 3, RESOLUTION, RESOLUTION, dtype=torch.float32)
+dummy_target_sizes = torch.tensor([[RESOLUTION, RESOLUTION]], dtype=torch.int64)
+
+print(f"Exporting deployable ONNX to: {OUTPUT_PATH}")
+torch.onnx.export(
+    wrapper,
+    (dummy_input, dummy_target_sizes),
+    OUTPUT_PATH,
+    input_names=["input", "target_sizes"],
+    output_names=["scores", "labels", "boxes"],
+    dynamic_axes={
+        "input": {0: "batch_size"},
+        "target_sizes": {0: "batch_size"},
+        "scores": {0: "batch_size"},
+        "labels": {0: "batch_size"},
+        "boxes": {0: "batch_size"},
+    },
+    opset_version=17,
+    dynamo=False,
+)
+
+size_mb = os.path.getsize(OUTPUT_PATH) / (1024 * 1024)
+print(f"Done. ONNX model saved ({size_mb:.1f} MB)")

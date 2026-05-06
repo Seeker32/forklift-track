@@ -3,36 +3,35 @@ name = "track"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "dill>=0.4.1",
     "lap>=0.5.12",
-    "numpy>=2.2.6",
-    "onnx>=1.21.0",
-    "onnxruntime-gpu>=1.25.1",
-    "opencv-python>=4.13.0.92",
+    "numpy<=2.2.0",
     "pyyaml>=6.0.3",
-    "rfdetr>=1.5.2",
-    "torch==2.10.0",
     "ultralytics>=8.4.45",
-    "yolov5>=7.0.14",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
 ]
-# Jetson Orin NX Super:
-# - Prefer installing into a project virtualenv instead of the system Python.
-# - Install NVIDIA-provided PyTorch wheel that matches the target JetPack/CUDA version.
-# - Install the matching ONNX Runtime GPU wheel or package source for that JetPack release.
-# - OpenCV is usually better installed from JetPack/apt packages on Jetson, not from PyPI.
-# - Then install this group for the remaining Python packages.
-jetson = [
-    "dill>=0.4.1",
-    "lap>=0.5.12",
-    "numpy>=2.2.6",
-    "onnx>=1.21.0",
-    "pyyaml>=6.0.3",
-    "ultralytics>=8.4.45",
+local-common = [
+    "opencv-python>=4.11.0.86",
+    "rfdetr>=1.5.2",
+    "yolov5>=7.0.14",
+]
+local-win = [
+    "onnx==1.20.0",
+    "onnxruntime-gpu>=1.23.0",
+    "torch==2.10.0",
+]
+local-macos = [
+    "onnx==1.20.0",
+    "onnxruntime>=1.23.0",
+    "torch==2.10.0",
+]
+local-jetson = [
+    "opencv-python>=4.11.0.86",
+    "yolov5>=7.0.14",
 ]

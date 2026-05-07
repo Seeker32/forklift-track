@@ -40,6 +40,9 @@ def run(
     debug_video: bool = False,
     debug_video_writer_factory: DebugVideoWriterFactory | None = None,
     model_path: str | None = None,
+    trt_fp16: bool = False,
+    trt_max_workspace_size: int | None = None,
+    trt_builder_optimization_level: int | None = None,
 ) -> None:
     config = load_config(config_path)
     detector_factory = detector_factory or _create_detector
@@ -63,6 +66,9 @@ def run(
             debug_sink=debug_sink,
             debug_video=debug_video,
             debug_video_writer_factory=debug_video_writer_factory or DebugVideoWriter,
+            trt_fp16=trt_fp16,
+            trt_max_workspace_size=trt_max_workspace_size,
+            trt_builder_optimization_level=trt_builder_optimization_level,
         )
 
 
@@ -121,12 +127,22 @@ def _run_camera(
     debug_sink: DebugSink | None = None,
     debug_video: bool = False,
     debug_video_writer_factory: DebugVideoWriterFactory | None = None,
+    trt_fp16: bool = False,
+    trt_max_workspace_size: int | None = None,
+    trt_builder_optimization_level: int | None = None,
 ) -> None:
-    detector = detector_factory(
-        model_path=camera_config["model_path"],
-        confidence=camera_config["confidence"],
-        class_names=class_names,
-    )
+    detector_kwargs = {
+        "model_path": camera_config["model_path"],
+        "confidence": camera_config["confidence"],
+        "class_names": class_names,
+    }
+    if trt_fp16:
+        detector_kwargs["trt_fp16"] = True
+    if trt_max_workspace_size is not None:
+        detector_kwargs["trt_max_workspace_size"] = trt_max_workspace_size
+    if trt_builder_optimization_level is not None:
+        detector_kwargs["trt_builder_optimization_level"] = trt_builder_optimization_level
+    detector = detector_factory(**detector_kwargs)
     tracker = tracker_factory()
     direction_detector = DirectionDetector(
         camera_id=camera_config["camera_id"],
@@ -196,6 +212,12 @@ def _create_detector(
     confidence: float,
     class_names: list[str],
     providers: list[str | tuple[str, dict[str, str]]] | None = None,
+    trt_fp16: bool = False,
+    trt_max_workspace_size: int | None = None,
+    trt_builder_optimization_level: int | None = None,
+    ort_profile: bool = False,
+    ort_profile_prefix: str | None = None,
+    ort_verbose: bool = False,
 ) -> Any:
     suffix = Path(model_path).suffix.lower()
     if suffix == ".onnx":
@@ -206,6 +228,18 @@ def _create_detector(
         }
         if providers is not None:
             kwargs["providers"] = providers
+        if trt_fp16:
+            kwargs["trt_fp16"] = True
+        if trt_max_workspace_size is not None:
+            kwargs["trt_max_workspace_size"] = trt_max_workspace_size
+        if trt_builder_optimization_level is not None:
+            kwargs["trt_builder_optimization_level"] = trt_builder_optimization_level
+        if ort_profile:
+            kwargs["ort_profile"] = True
+        if ort_profile_prefix is not None:
+            kwargs["ort_profile_prefix"] = ort_profile_prefix
+        if ort_verbose:
+            kwargs["ort_verbose"] = True
         return ONNXForkliftDetector(**kwargs)
     if suffix == ".engine":
         raise ValueError(

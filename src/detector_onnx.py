@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,13 +30,21 @@ class ONNXForkliftDetector:
         providers: list[str | tuple[str, dict[str, str]]] | None = None,
         trt_engine_cache_path: str | None = None,
         trt_fp16: bool = False,
+        trt_max_workspace_size: int | None = None,
+        trt_builder_optimization_level: int | None = None,
+        ort_profile: bool = False,
+        ort_profile_prefix: str | None = None,
+        ort_verbose: bool = False,
         runtime_module: Any | None = None,
         runtime_loader: Any | None = None,
+        clock: Any = time.perf_counter,
     ) -> None:
         self.confidence = confidence
         self.class_names = class_names or ["forklift_with_load", "forklift_empty"]
         self.allowed_class_names = allowed_class_names
         self.num_select = num_select
+        self._clock = clock
+        self._stage_timing_sink: Any | None = None
         ort = runtime_module
         if ort is None:
             try:
@@ -44,12 +53,23 @@ class ONNXForkliftDetector:
                 raise RuntimeError(
                     "ONNX Runtime is unavailable. Install onnxruntime or onnxruntime-gpu to load .onnx models."
                 ) from exc
+        sess_options = self._session_options(
+            ort,
+            ort_profile=ort_profile,
+            ort_profile_prefix=ort_profile_prefix,
+            ort_verbose=ort_verbose,
+        )
+        resolved_providers = self._resolved_providers(
+            providers=providers,
+            trt_engine_cache_path=trt_engine_cache_path,
+            trt_fp16=trt_fp16,
+            trt_max_workspace_size=trt_max_workspace_size,
+            trt_builder_optimization_level=trt_builder_optimization_level,
+        )
         self._session = ort.InferenceSession(
             onnx_path,
-            providers=providers or self._default_providers(
-                trt_engine_cache_path=trt_engine_cache_path,
-                trt_fp16=trt_fp16,
-            ),
+            sess_options=sess_options,
+            providers=resolved_providers,
         )
         self._output_names = tuple(output.name for output in self._session.get_outputs())
         output_name_set = set(self._output_names)
@@ -61,6 +81,8 @@ class ONNXForkliftDetector:
         *,
         trt_engine_cache_path: str | None,
         trt_fp16: bool,
+        trt_max_workspace_size: int | None = None,
+        trt_builder_optimization_level: int | None = None,
     ) -> list[str | tuple[str, dict[str, str]]]:
         tensorrt_options = {
             "trt_engine_cache_enable": "True",
@@ -68,19 +90,80 @@ class ONNXForkliftDetector:
         }
         if trt_fp16:
             tensorrt_options["trt_fp16_enable"] = "True"
+        if trt_max_workspace_size is not None:
+            tensorrt_options["trt_max_workspace_size"] = str(int(trt_max_workspace_size))
+        if trt_builder_optimization_level is not None:
+            tensorrt_options["trt_builder_optimization_level"] = str(int(trt_builder_optimization_level))
         return [
             ("TensorrtExecutionProvider", tensorrt_options),
             "CUDAExecutionProvider",
             "CPUExecutionProvider",
         ]
 
+    @staticmethod
+    def _resolved_providers(
+        *,
+        providers: list[str | tuple[str, dict[str, str]]] | None,
+        trt_engine_cache_path: str | None,
+        trt_fp16: bool,
+        trt_max_workspace_size: int | None = None,
+        trt_builder_optimization_level: int | None = None,
+    ) -> list[str | tuple[str, dict[str, str]]]:
+        default_providers = ONNXForkliftDetector._default_providers(
+            trt_engine_cache_path=trt_engine_cache_path,
+            trt_fp16=trt_fp16,
+            trt_max_workspace_size=trt_max_workspace_size,
+            trt_builder_optimization_level=trt_builder_optimization_level,
+        )
+        if providers is None:
+            return default_providers
+
+        tensorrt_name, tensorrt_options = default_providers[0]
+        resolved: list[str | tuple[str, dict[str, str]]] = []
+        for provider in providers:
+            if provider == tensorrt_name:
+                resolved.append((tensorrt_name, dict(tensorrt_options)))
+                continue
+            if isinstance(provider, tuple) and provider[0] == tensorrt_name:
+                resolved.append((tensorrt_name, {**tensorrt_options, **provider[1]}))
+                continue
+            resolved.append(provider)
+        return resolved
+
+    @staticmethod
+    def _session_options(
+        ort: Any,
+        *,
+        ort_profile: bool,
+        ort_profile_prefix: str | None,
+        ort_verbose: bool,
+    ) -> Any | None:
+        session_options_factory = getattr(ort, "SessionOptions", None)
+        if session_options_factory is None:
+            return None
+        sess_options = session_options_factory()
+        if ort_profile:
+            sess_options.enable_profiling = True
+            if ort_profile_prefix:
+                sess_options.profile_file_prefix = ort_profile_prefix
+        if ort_verbose:
+            sess_options.log_severity_level = 0
+            sess_options.log_verbosity_level = max(1, int(getattr(sess_options, "log_verbosity_level", 0)))
+        return sess_options
+
     def detect(self, frame: np.ndarray) -> list[dict[str, Any]]:
         h, w = frame.shape[:2]
-        input_tensor = self._preprocess(frame)
 
+        preprocess_start = self._clock()
+        input_tensor = self._preprocess(frame)
+        preprocess_end = self._clock()
+
+        inference_start = preprocess_end
         outputs = self._session.run(None, {"input": input_tensor})
+        inference_end = self._clock()
         output_map = {name: value for name, value in zip(self._output_names, outputs)}
 
+        postprocess_start = inference_end
         if self._is_raw_output_format:
             detections = self._postprocess(
                 dets=np.asarray(self._require_output(output_map, "pred_boxes")),
@@ -101,7 +184,33 @@ class ONNXForkliftDetector:
 
         if self.allowed_class_names is not None:
             detections = [d for d in detections if d.get("class_name") in self.allowed_class_names]
+        postprocess_end = self._clock()
+        self._record_stage_timings(
+            preprocess_ms=(preprocess_end - preprocess_start) * 1000.0,
+            inference_ms=(inference_end - inference_start) * 1000.0,
+            postprocess_ms=(postprocess_end - postprocess_start) * 1000.0,
+        )
         return detections
+
+    def set_stage_timing_sink(self, sink: Any | None) -> None:
+        self._stage_timing_sink = sink
+
+    def end_profiling(self) -> str | None:
+        end_profiling = getattr(self._session, "end_profiling", None)
+        if not callable(end_profiling):
+            return None
+        return end_profiling()
+
+    def _record_stage_timings(self, *, preprocess_ms: float, inference_ms: float, postprocess_ms: float) -> None:
+        if self._stage_timing_sink is None:
+            return
+        self._stage_timing_sink(
+            {
+                "preprocess": preprocess_ms,
+                "inference": inference_ms,
+                "postprocess": postprocess_ms,
+            }
+        )
 
     @staticmethod
     def _require_output(output_map: dict[str, Any], name: str) -> Any:

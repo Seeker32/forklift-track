@@ -30,6 +30,12 @@ def run_detector_benchmark(
     frames: int,
     warmup: int,
     provider_mode: str = "auto",
+    trt_fp16: bool = False,
+    trt_max_workspace_size: int | None = None,
+    trt_builder_optimization_level: int | None = None,
+    ort_profile: bool = False,
+    ort_profile_prefix: str | None = None,
+    ort_verbose: bool = False,
     detector_factory: Any = _create_detector,
     capture_factory: Any = _create_capture,
     clock: Any = time.perf_counter,
@@ -39,7 +45,18 @@ def run_detector_benchmark(
         confidence=confidence,
         class_names=class_names,
         providers=_provider_mode_providers(provider_mode),
+        trt_fp16=trt_fp16,
+        trt_max_workspace_size=trt_max_workspace_size,
+        trt_builder_optimization_level=trt_builder_optimization_level,
+        ort_profile=ort_profile,
+        ort_profile_prefix=ort_profile_prefix,
+        ort_verbose=ort_verbose,
     )
+    stage_latency_ms = _empty_stage_latency_samples()
+    detector_stage_timings_ms: dict[str, float] = {}
+    set_stage_timing_sink = getattr(detector, "set_stage_timing_sink", None)
+    if callable(set_stage_timing_sink):
+        set_stage_timing_sink(lambda timings_ms: detector_stage_timings_ms.update(timings_ms))
     capture = capture_factory(source)
     if not capture.isOpened():
         raise RuntimeError(f"Failed to open video source: {source}")
@@ -59,10 +76,13 @@ def run_detector_benchmark(
             if max_frames and processed_frames >= max_frames:
                 break
 
+            read_start = clock()
             ok, frame = capture.read()
+            read_end = clock()
             if not ok:
                 break
 
+            detector_stage_timings_ms = {}
             detect_start = clock()
             detections = detector.detect(frame)
             detect_end = clock()
@@ -74,10 +94,13 @@ def run_detector_benchmark(
 
             if processed_frames > warmup:
                 latencies_ms.append((detect_end - detect_start) * 1000.0)
+                stage_latency_ms["read"].append((read_end - read_start) * 1000.0)
+                _append_stage_timings(stage_latency_ms, detector_stage_timings_ms)
     finally:
+        ort_profile_file = _end_detector_profiling(detector) if ort_profile else None
         capture.release()
 
-    return {
+    result = {
         "mode": "detector",
         "source": source,
         "model_path": model_path,
@@ -90,7 +113,11 @@ def run_detector_benchmark(
         "total_time_s": max(0.0, last_timestamp - loop_start),
         "avg_fps": _avg_fps(processed_frames, last_timestamp - loop_start),
         "latency_ms": _latency_summary(latencies_ms),
+        "stage_latency_ms": _stage_latency_summary(stage_latency_ms),
     }
+    if ort_profile_file:
+        result["ort_profile_file"] = ort_profile_file
+    return result
 
 
 def run_pipeline_benchmark(
@@ -100,6 +127,9 @@ def run_pipeline_benchmark(
     frames: int,
     warmup: int,
     provider_mode: str = "auto",
+    trt_fp16: bool = False,
+    trt_max_workspace_size: int | None = None,
+    trt_builder_optimization_level: int | None = None,
     detector_factory: Any = _create_detector,
     tracker_factory: Any = ByteTrackTracker,
     capture_factory: Any = _create_capture,
@@ -115,6 +145,9 @@ def run_pipeline_benchmark(
             confidence=confidence,
             class_names=class_names,
             providers=_provider_mode_providers(provider_mode),
+            trt_fp16=trt_fp16,
+            trt_max_workspace_size=trt_max_workspace_size,
+            trt_builder_optimization_level=trt_builder_optimization_level,
         )
         metrics.providers = _detector_providers(detector)
         return _TimedDetector(detector=detector, metrics=metrics)
@@ -254,6 +287,19 @@ def _provider_mode_providers(provider_mode: str) -> list[str | tuple[str, dict[s
     raise ValueError(f"Unsupported provider mode: {provider_mode}")
 
 
+def _end_detector_profiling(detector: Any) -> str | None:
+    end_profiling = getattr(detector, "end_profiling", None)
+    if callable(end_profiling):
+        return end_profiling()
+    session = getattr(detector, "_session", None)
+    if session is None:
+        return None
+    session_end_profiling = getattr(session, "end_profiling", None)
+    if callable(session_end_profiling):
+        return session_end_profiling()
+    return None
+
+
 def _latency_summary(latencies_ms: list[float]) -> dict[str, float]:
     if not latencies_ms:
         return {"mean": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0}
@@ -263,6 +309,29 @@ def _latency_summary(latencies_ms: list[float]) -> dict[str, float]:
         "p50": float(np.percentile(values, 50)),
         "p95": float(np.percentile(values, 95)),
         "p99": float(np.percentile(values, 99)),
+    }
+
+
+def _empty_stage_latency_samples() -> dict[str, list[float]]:
+    return {
+        "read": [],
+        "preprocess": [],
+        "inference": [],
+        "postprocess": [],
+    }
+
+
+def _append_stage_timings(stage_latency_ms: dict[str, list[float]], detector_stage_timings_ms: dict[str, float]) -> None:
+    for stage_name in ("preprocess", "inference", "postprocess"):
+        if stage_name not in detector_stage_timings_ms:
+            continue
+        stage_latency_ms[stage_name].append(float(detector_stage_timings_ms[stage_name]))
+
+
+def _stage_latency_summary(stage_latency_ms: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+    return {
+        stage_name: _latency_summary(stage_samples)
+        for stage_name, stage_samples in stage_latency_ms.items()
     }
 
 
@@ -310,6 +379,19 @@ def _print_summary(result: dict[str, Any]) -> None:
     print(f"  p50:  {result['latency_ms']['p50']:.2f}")
     print(f"  p95:  {result['latency_ms']['p95']:.2f}")
     print(f"  p99:  {result['latency_ms']['p99']:.2f}")
+    stage_latency_ms = result.get("stage_latency_ms")
+    if stage_latency_ms:
+        print("stage_latency_ms:")
+        for stage_name in ("read", "preprocess", "inference", "postprocess"):
+            if stage_name not in stage_latency_ms:
+                continue
+            print(f"  {stage_name}:")
+            print(f"    mean: {stage_latency_ms[stage_name]['mean']:.2f}")
+            print(f"    p50:  {stage_latency_ms[stage_name]['p50']:.2f}")
+            print(f"    p95:  {stage_latency_ms[stage_name]['p95']:.2f}")
+            print(f"    p99:  {stage_latency_ms[stage_name]['p99']:.2f}")
+    if result.get("ort_profile_file"):
+        print(f"ort_profile_file:{result['ort_profile_file']}")
     print("class_counts:")
     for class_name, count in result["class_counts"].items():
         print(f"  {class_name}: {count}")
@@ -332,6 +414,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--frames", type=int, default=300, help="Measured frames after warmup (0=all)")
     parser.add_argument("--warmup", type=int, default=30, help="Warmup frames to exclude from latency stats")
     parser.add_argument("--confidence", type=float, help="Override detector confidence")
+    parser.add_argument("--trt-fp16", action="store_true", help="Enable FP16 when using TensorRT Execution Provider")
+    parser.add_argument(
+        "--trt-max-workspace-size",
+        type=int,
+        help="TensorRT EP maximum workspace size in bytes",
+    )
+    parser.add_argument(
+        "--trt-builder-optimization-level",
+        type=int,
+        help="TensorRT EP builder optimization level (0-5)",
+    )
+    parser.add_argument("--ort-profile", action="store_true", help="Enable ONNX Runtime profiling in detector mode")
+    parser.add_argument("--ort-profile-prefix", help="Prefix path for ONNX Runtime profile output")
+    parser.add_argument("--ort-verbose", action="store_true", help="Enable verbose ONNX Runtime logging in detector mode")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON result")
     args = parser.parse_args(argv)
 
@@ -351,6 +447,12 @@ def main(argv: list[str] | None = None) -> None:
             frames=args.frames,
             warmup=args.warmup,
             provider_mode=args.provider_mode,
+            trt_fp16=args.trt_fp16,
+            trt_max_workspace_size=args.trt_max_workspace_size,
+            trt_builder_optimization_level=args.trt_builder_optimization_level,
+            ort_profile=args.ort_profile,
+            ort_profile_prefix=args.ort_profile_prefix,
+            ort_verbose=args.ort_verbose,
         )
     else:
         result = run_pipeline_benchmark(
@@ -359,6 +461,9 @@ def main(argv: list[str] | None = None) -> None:
             frames=args.frames,
             warmup=args.warmup,
             provider_mode=args.provider_mode,
+            trt_fp16=args.trt_fp16,
+            trt_max_workspace_size=args.trt_max_workspace_size,
+            trt_builder_optimization_level=args.trt_builder_optimization_level,
         )
 
     if args.json:

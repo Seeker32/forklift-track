@@ -147,6 +147,37 @@ cameras:
 
         self.assertEqual(detector_kwargs[0]["model_path"], "models/inference_model.onnx")
 
+    def test_run_passes_trt_options_to_detector_factory(self):
+        config_path = self.write_config(
+            """
+cameras:
+  - camera_id: gate_01
+    source: fake-source
+    line:
+      start: [0, 0]
+      end: [10, 0]
+    in_direction: [0, 1]
+    model_path: models/inference_model.onnx
+"""
+        )
+        captures = {"fake-source": FakeCapture([])}
+        detector_kwargs = []
+
+        run(
+            config_path,
+            trt_fp16=True,
+            trt_max_workspace_size=2147483648,
+            trt_builder_optimization_level=5,
+            detector_factory=lambda **kwargs: detector_kwargs.append(kwargs) or FakeDetector(),
+            tracker_factory=lambda: FakeTracker(),
+            capture_factory=lambda source: captures[source],
+            event_sink=lambda event: None,
+        )
+
+        self.assertTrue(detector_kwargs[0]["trt_fp16"])
+        self.assertEqual(detector_kwargs[0]["trt_max_workspace_size"], 2147483648)
+        self.assertEqual(detector_kwargs[0]["trt_builder_optimization_level"], 5)
+
     def test_load_config_defaults_line_width(self):
         config_path = self.write_config(
             """
@@ -354,6 +385,23 @@ cameras:
         self.assertEqual(detector, onnx_detector.return_value)
         onnx_detector.assert_called_once_with(
             onnx_path="models/INFERENCE_MODEL.ONNX", confidence=0.3, allowed_class_names=["forklift_empty"],
+        )
+
+    def test_create_detector_passes_explicit_providers_to_onnx_detector(self):
+        with patch("src.pipeline.ONNXForkliftDetector", create=True) as onnx_detector:
+            detector = _create_detector(
+                model_path="models/inference_model.onnx",
+                confidence=0.3,
+                class_names=["forklift_empty"],
+                providers=["CPUExecutionProvider"],
+            )
+
+        self.assertEqual(detector, onnx_detector.return_value)
+        onnx_detector.assert_called_once_with(
+            onnx_path="models/inference_model.onnx",
+            confidence=0.3,
+            allowed_class_names=["forklift_empty"],
+            providers=["CPUExecutionProvider"],
         )
 
     def test_create_detector_rejects_engine_model_with_clear_error(self):

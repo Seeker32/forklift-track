@@ -48,6 +48,30 @@ class MainTest(unittest.TestCase):
             debug_video=True,
         )
 
+    def test_main_passes_trt_options_to_pipeline(self):
+        with patch("main.run") as run:
+            main.main(
+                [
+                    "--config",
+                    "config/custom.yaml",
+                    "--model-path",
+                    "models/inference_model.onnx",
+                    "--trt-fp16",
+                    "--trt-max-workspace-size",
+                    "2147483648",
+                    "--trt-builder-optimization-level",
+                    "5",
+                ]
+            )
+
+        run.assert_called_once_with(
+            "config/custom.yaml",
+            model_path="models/inference_model.onnx",
+            trt_fp16=True,
+            trt_max_workspace_size=2147483648,
+            trt_builder_optimization_level=5,
+        )
+
     def test_main_passes_debug_video_option_to_pipeline(self):
         with patch("main.run") as run:
             main.main(["--config", "config/custom.yaml", "--debug-video"])
